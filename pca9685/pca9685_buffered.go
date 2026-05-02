@@ -13,7 +13,7 @@ const buffLen = 16 * 2 * 2
 // on all PWM signals. This is useful when working with systems
 // which require as little as possible I/O overhead.
 type DevBuffered struct {
-	Dev
+	*Dev
 	// LED buffer, first value is address, following values correspond to LED registers.
 	//  [0]: LEDSTART register address
 	//  [1:5]: LED0 corresponding to PWM channel 0

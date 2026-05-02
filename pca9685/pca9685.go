@@ -25,12 +25,13 @@ type Dev struct {
 
 type PWMConfig struct {
 	Period uint64
+	FreqHz uint16
 }
 
 // New creates a new instance of a PCA9685 device. It performs
 // no IO on the i2c bus.
-func New(bus drivers.I2C, addr uint8) Dev {
-	return Dev{
+func New(bus drivers.I2C, addr uint8) *Dev {
+	return &Dev{
 		bus:  bus,
 		addr: addr,
 	}
@@ -38,14 +39,14 @@ func New(bus drivers.I2C, addr uint8) Dev {
 
 // Configure enables autoincrement, sets all PWM signals to logic low (Ground)
 // and finally sets the Period.
-func (d Dev) Configure(cfg PWMConfig) error {
+func (d *Dev) Configure(cfg PWMConfig) error {
 	err := d.SetAI(true)
 	if err != nil {
 		return err
 	}
 	d.SetAll(0)
 	d.SetDrive(true)
-	return d.SetPeriod(cfg.Period)
+	return d.SetPeriod(cfg.FreqHz)
 }
 
 // SetPeriod updates the period of this PWM integrated circuit in nanoseconds.
@@ -59,18 +60,18 @@ func (d Dev) Configure(cfg PWMConfig) error {
 //
 // PCA9685 accepts frequencies inbetween [40..1000 Hz],
 // or expressed as a period [1..25ms].
-func (d Dev) SetPeriod(period uint64) error {
+func (d *Dev) SetPeriod(freq uint16) error {
 	const div = maxtop + 1
-	if period == 0 {
-		period = 1 * milliseconds
+	if freq == 0 {
+		freq = 1000 // default 1kHz
 	}
-	if period > 25*milliseconds || period < 1*milliseconds {
+	if freq < 40 || freq > 1000 {
 		return ErrBadPeriod
 	}
 	// Correct for overshoot in provided frequency: https://github.com/adafruit/Adafruit-PWM-Servo-Driver-Library/issues/11
 	// Note: 0.96 was empirically determined to be closer. Should follow up to understand what is happening here.
-	freq := 96 * 1e9 / (100 * period)
-	prescale := byte(oscclock/(div*freq) - 1)
+	// freq = freq * 96 / 100
+	prescale := byte(uint32(oscclock)/(uint32(div)*uint32(freq)) - 1)
 	err := d.Sleep(true) // Enable sleep to write to PRESCALE register
 	if err != nil {
 		return err
@@ -84,7 +85,7 @@ func (d Dev) SetPeriod(period uint64) error {
 }
 
 // Top returns max value PWM can take.
-func (d Dev) Top() uint32 {
+func (d *Dev) Top() uint32 {
 	return maxtop
 }
 
@@ -95,7 +96,7 @@ func (d Dev) Top() uint32 {
 //	d.Set(1, d.Top()/4)
 //
 // sets the dutycycle of second (LED1) channel to 25%.
-func (d Dev) Set(channel uint8, on uint32) {
+func (d *Dev) Set(channel uint8, on uint16) {
 	if on > maxtop {
 		panic("pca9685: value must be in range 0..4095")
 	}
@@ -105,13 +106,13 @@ func (d Dev) Set(channel uint8, on uint32) {
 // SetAll sets all PWM signals to a ON value. Equivalent of calling
 //
 //	Dev.Set(pca9685.ALLLED, value)
-func (d Dev) SetAll(on uint32) {
+func (d *Dev) SetAll(on uint16) {
 	d.Set(ALLLED, on)
 }
 
 // IsConnected returns error if read fails or if
 // driver suspects device is not connected.
-func (d Dev) IsConnected() error {
+func (d *Dev) IsConnected() error {
 	// Set data to the NOT of default MODE1 contents.
 	// If read is succesful then data will be modified
 	const notdefaultMODE1 = ^defaultMODE1Value
@@ -128,7 +129,7 @@ func (d Dev) IsConnected() error {
 
 // SetAI enables or disables autoincrement feature on device. Useful for
 // writing to many consecutive registers in one shot.
-func (d Dev) SetAI(ai bool) error {
+func (d *Dev) SetAI(ai bool) error {
 	err := d.readReg(MODE1, d.buf[:1])
 	if err != nil {
 		return err
@@ -146,7 +147,7 @@ func (d Dev) SetAI(ai bool) error {
 //
 //	false: The 16 LEDn outputs are configured with an open-drain structure.
 //	true: The 16 LEDn outputs are configured with a totem pole structure.
-func (d Dev) SetDrive(outdrv bool) error {
+func (d *Dev) SetDrive(outdrv bool) error {
 	err := d.readReg(MODE2, d.buf[:1])
 	if err != nil {
 		return err
@@ -165,7 +166,7 @@ func (d Dev) SetDrive(outdrv bool) error {
 //	  Stops PWM. Allows writing to PRE_SCALE register.
 //	else
 //	  wakes PCA9685. Resumes PWM.
-func (d Dev) Sleep(sleepEnabled bool) error {
+func (d *Dev) Sleep(sleepEnabled bool) error {
 	err := d.readReg(MODE1, d.buf[:1])
 	if err != nil {
 		return err
@@ -190,7 +191,7 @@ func (d Dev) Sleep(sleepEnabled bool) error {
 // the time and low for the rest. Inverting flips the output as if a NOT gate
 // was placed at the output, meaning that the output would be 25% low and 75%
 // high with a duty cycle of 25%.
-func (d Dev) SetInverting(_ uint8, inverting bool) error {
+func (d *Dev) SetInverting(_ uint8, inverting bool) error {
 	err := d.readReg(MODE2, d.buf[:1])
 	if err != nil {
 		return err
@@ -209,7 +210,7 @@ func (d Dev) SetInverting(_ uint8, inverting bool) error {
 // the time when the LED output will be negated.
 // In this way, the phase shift becomes completely programmable.
 // The resolution for the phase shift is 1⁄4096 of the target frequency.
-func (d Dev) SetPhased(channel uint8, on, off uint32) {
+func (d *Dev) SetPhased(channel uint8, on, off uint16) {
 	binary.LittleEndian.PutUint16(d.buf[:2], uint16(on)&maxtop)
 	binary.LittleEndian.PutUint16(d.buf[2:4], uint16(off)&maxtop)
 	onLReg, _, _, _ := LED(channel)
